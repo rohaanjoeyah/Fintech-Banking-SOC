@@ -1,0 +1,62 @@
+services:
+  core-switch:
+    build: ./iso8583_switch
+    container_name: fintech-core-switch
+    restart: unless-stopped
+    environment:
+      - SWITCH_HOST=0.0.0.0
+      - SWITCH_PORT=8583
+      - LEDGER_DB_PATH=/app/data/ledger.db
+      - AUDIT_LOG_PATH=/var/log/fintech/banking_audit.json
+    volumes:
+      - ./logs:/var/log/fintech
+      - switch_data:/app/data
+    networks:
+      fintech_soc_net:
+        ipv4_address: 172.20.0.20
+
+  fintech-api:
+    build: ./api_gateway
+    container_name: fintech-api-gateway
+    restart: unless-stopped
+    depends_on:
+      - core-switch
+    ports:
+      - "8000:8000"
+    environment:
+      - SWITCH_HOST=172.20.0.20
+      - SWITCH_PORT=8583
+      - AUDIT_LOG_PATH=/var/log/fintech/banking_audit.json
+      - JWT_SECRET=fintech-soc-super-secret-jwt-key-2026
+    volumes:
+      - ./logs:/var/log/fintech
+    networks:
+      fintech_soc_net:
+        ipv4_address: 172.20.0.10
+
+  pcap-sniffer:
+    image: nicolaka/netshoot:latest
+    container_name: fintech-pcap-sniffer
+    restart: unless-stopped
+    depends_on:
+      - fintech-api
+    network_mode: "service:fintech-api"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./pcaps:/pcaps
+    command: >
+      tcpdump -i any -nn -U -s 0
+      "tcp port 8000 or tcp port 8583"
+      -w /pcaps/fintech_traffic.pcap
+
+networks:
+  fintech_soc_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+volumes:
+  switch_data:
