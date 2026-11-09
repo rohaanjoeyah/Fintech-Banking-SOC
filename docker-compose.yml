@@ -51,6 +51,25 @@ services:
       "tcp port 8000 or tcp port 8583"
       -w /pcaps/fintech_traffic.pcap
 
+  splunk-siem:
+    image: splunk/splunk:latest
+    container_name: fintech-splunk-siem
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+      - "8089:8089"
+    environment:
+      - SPLUNK_START_ARGS=--accept-license
+      - SPLUNK_GENERAL_TERMS=--accept-sgt-current-at-splunk-com
+      - SPLUNK_PASSWORD=FinTechSOC2026!
+    volumes:
+      - ./logs:/var/log/fintech:ro
+      - splunk_var:/opt/splunk/var
+      - splunk_etc:/opt/splunk/etc
+    networks:
+      fintech_soc_net:
+        ipv4_address: 172.20.0.30
+
 networks:
   fintech_soc_net:
     driver: bridge
@@ -60,3 +79,5 @@ networks:
 
 volumes:
   switch_data:
+  splunk_var:
+  splunk_etc:

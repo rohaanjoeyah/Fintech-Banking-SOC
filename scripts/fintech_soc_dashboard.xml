@@ -1,0 +1,167 @@
+<dashboard version="1.1" theme="dark">
+  <label>Banking &amp; FinTech SOC — Threat Detection &amp; Fraud Monitoring</label>
+  <description>Real-Time Open Banking API (HTTP/JSON) &amp; Core Payment Switch (TCP/ISO 8583) Security Operations Center</description>
+
+  <row>
+    <panel>
+      <title>Total Audited Financial &amp; Auth Events</title>
+      <single>
+        <search>
+          <query>index=fintech_soc | stats count</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x118832","0x118832"]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Scenario 1: Credential Stuffing Failures (HTTP 401)</title>
+      <single>
+        <search>
+          <query>index=fintech_soc event_type="AUTH_FAIL" | stats count</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeValues">[5,20]</option>
+        <option name="rangeColors">["0x118832","0xd94e17","0xd41f1f"]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Scenario 2: BOLA / IDOR Unauthorized Account Scrapes</title>
+      <single>
+        <search>
+          <query>index=fintech_soc event_type="ACCOUNT_BALANCE_QUERY" bola_indicator="true" | stats count</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeValues">[1,10]</option>
+        <option name="rangeColors">["0x118832","0xd94e17","0xd41f1f"]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Core Switch Rejections (ISO 8583 DE39 != 00)</title>
+      <single>
+        <search>
+          <query>index=fintech_soc component="ISO8583_CORE_SWITCH" iso_response_code!="00" | stats count</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeValues">[0,2]</option>
+        <option name="rangeColors">["0x118832","0xd94e17","0xd41f1f"]</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Scenario 1 Detection: Credential Stuffing to Account Takeover (ATO) &amp; Illicit Wire Chain</title>
+      <table>
+        <search>
+          <query>index=fintech_soc (event_type="AUTH_FAIL" OR event_type="AUTH_SUCCESS" OR event_type="BENEFICIARY_ADDED" OR event_type="TRANSACTION_INITIATED")
+| stats count(eval(event_type="AUTH_FAIL")) as Failed_Logins,
+        count(eval(event_type="AUTH_SUCCESS")) as Successful_Logins,
+        values(beneficiary_account) as Added_Mule_Beneficiary,
+        max(transaction_amount) as Max_Transfer_USD,
+        values(user_id) as Targeted_Users
+        by client_ip
+| where Failed_Logins &gt;= 10 OR isnotnull(Added_Mule_Beneficiary)
+| sort - Failed_Logins</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+    <panel>
+      <title>ISO 8583 Payment Switch Response Code Distribution (DE 39)</title>
+      <chart>
+        <search>
+          <query>index=fintech_soc component="ISO8583_CORE_SWITCH"
+| eval Response_Status=case(
+    iso_response_code=="00", "00 - Approved",
+    iso_response_code=="51", "51 - Insufficient Funds (Velocity Drain)",
+    iso_response_code=="05", "05 - Do Not Honor (Frozen Account)",
+    1==1, iso_response_code)
+| stats count by Response_Status</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="charting.chart">pie</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Scenario 2 Detection: OWASP API1 Broken Object Level Authorization (BOLA) Enumeration</title>
+      <table>
+        <search>
+          <query>index=fintech_soc event_type="ACCOUNT_BALANCE_QUERY"
+| stats count as Total_Queries,
+        dc(target_account) as Distinct_Accounts_Accessed,
+        count(eval(bola_indicator="true")) as Unauthorized_BOLA_Hits,
+        values(authenticated_account) as Own_Account
+        by user_id, client_ip, user_agent
+| where Distinct_Accounts_Accessed &gt; 1 OR Unauthorized_BOLA_Hits &gt; 0
+| sort - Unauthorized_BOLA_Hits</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+    <panel>
+      <title>Scenario 3 Detection: AML Structuring ("Smurfing") &amp; Velocity Bypass (5-Min Window)</title>
+      <table>
+        <search>
+          <query>index=fintech_soc event_type="TRANSACTION_INITIATED"
+| bin _time span=5m
+| stats count as Tx_Count,
+        sum(transaction_amount) as Cumulative_Attempted_USD,
+        sum(eval(if(iso_response_code="00", transaction_amount, 0))) as Approved_Drained_USD,
+        max(transaction_amount) as Max_Single_Tx_USD,
+        values(static_aml_flag) as Static_CTR_Flag,
+        values(iso_response_code) as Switch_DE39_Codes
+        by user_id, src_account, dst_account, client_ip
+| where Tx_Count &gt;= 5 AND Max_Single_Tx_USD &lt; 1000 AND Cumulative_Attempted_USD &gt;= 10000</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Northbound HTTP API to Southbound ISO 8583 Core Switch Protocol Correlation (By Trace ID)</title>
+      <table>
+        <search>
+          <query>index=fintech_soc trace_id="ATK*"
+| stats values(component) as Layers_Traversed,
+        values(event_type) as Events,
+        values(client_ip) as Attacker_IP,
+        values(endpoint) as HTTP_Endpoint,
+        values(iso_mti_req) as ISO_Req_MTI,
+        values(iso_mti_resp) as ISO_Resp_MTI,
+        values(transaction_amount) as Amount_USD,
+        values(iso_response_code) as DE39_Code
+        by trace_id
+| sort trace_id</query>
+          <earliest>0</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="count">15</option>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+  </row>
+</dashboard>
